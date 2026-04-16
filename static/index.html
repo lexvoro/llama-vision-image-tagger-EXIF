@@ -74,6 +74,11 @@
                             <span>⚡</span>
                             Process All
                         </button>
+						<button @click="saveAllMetadata" 
+        class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center gap-1">
+    <span>💾</span>
+    Save All
+</button>
                     </div>
                 </div>
             </div>
@@ -232,7 +237,39 @@
                 const folderOpened = ref(false)
                 const isLoading = ref(false)
                 const loadingStatus = ref('')
-                
+                const saveAllMetadata = async () => {
+    try {
+        isLoading.value = true
+        loadingStatus.value = 'Saving everything...'
+
+        // Собираем данные всех картинок в один объект
+        const metadataMap = {}
+        images.value.forEach(img => {
+            metadataMap[img.path] = {
+                description: img.description,
+                tags: img.tags,
+                text_content: img.textContent,
+                is_processed: img.is_processed
+            }
+        })
+
+        const response = await fetch('/save-all-metadata', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ metadata: metadataMap })
+        })
+
+        if (!response.ok) throw new Error('Failed to save all metadata')
+
+        alert('All changes for all images saved successfully!')
+    } catch (err) {
+        console.error('Error saving all metadata:', err)
+        alert('Error: ' + err.message)
+    } finally {
+        isLoading.value = false
+        loadingStatus.value = ''
+    }
+}
                 const openFolder = async () => {
                     if (!folderPath.value) {
                         alert('Please enter a folder path')
@@ -464,7 +501,7 @@
                     
                     saving.value = true
                     try {
-                        const response = await fetch('/update-metadata', {
+                        const response = await fetch('/save-all-metadata', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -556,6 +593,7 @@
                     newTag,
                     saving,
                     saveMetadata,
+					saveAllMetadata,
                     resetChanges,
                     addTag,
                     removeTag,

@@ -4,9 +4,12 @@ import logging
 from typing import Dict, List, Optional
 import json
 from pydantic import BaseModel
+from PIL import Image
+import os
 
 logger = logging.getLogger(__name__)
 
+# Схемы данных
 class ImageDescription(BaseModel):
     description: str
 
@@ -20,126 +23,117 @@ class ImageText(BaseModel):
 class ImageProcessor:
     def __init__(self, model_name: str = 'llama3.2-vision'):
         self.model_name = model_name
+        self.temp_path = Path("temp_processing.jpg")
 
     async def process_image(self, image_path: Path) -> Dict:
-        """
-        Process an image using Ollama vision model to generate tags, description, and extract text.
-        
-        Returns:
-            Dict containing description, tags, and text_content
-        """
+        """Обработка изображения с защитой от вылетов."""
         try:
-            # Ensure image path exists
             if not image_path.exists():
-                raise FileNotFoundError(f"Image not found: {image_path}")
+                return {"is_processed": False, "error": "File not found"}
 
-            # Convert image path to string for Ollama
-            image_path_str = str(image_path)
+            # Уменьшаем фото до 1024px для стабильности GPU
+            with Image.open(image_path) as img:
+                img.thumbnail((1024, 1024))
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                img.save(self.temp_path, "JPEG", quality=85)
 
-            # Get structured responses using Pydantic models
-            logger.info(f"Getting description for image: {image_path}")
-            description_response = await self._get_description(image_path_str)
-            logger.debug(f"Received description: {description_response.description}")
-            
-            # Get tags
-            logger.info(f"Getting tags for image: {image_path}")
-            tags_response = await self._get_tags(image_path_str)
-            logger.debug(f"Received tags: {tags_response.tags}")
-            
-            # Get text content
-            logger.info(f"Getting text content for image: {image_path}")
-            text_response = await self._get_text_content(image_path_str)
-            logger.debug(
-                f"Received text content - has_text: {text_response.has_text}, "
-                f"content: {text_response.text_content if text_response.has_text else 'None'}"
-            )
+            image_path_str = str(self.temp_path.absolute())
+
+            # Запросы к нейросети
+            logger.info(f"Analyzing image: {image_path.name}")
+            description_res = await self._get_description(image_path_str)
+            tags_res = await self._get_tags(image_path_str)
+            text_res = await self._get_text_content(image_path_str)
+
+            if self.temp_path.exists():
+                os.remove(self.temp_path)
 
             return {
-                "description": description_response.description,
-                "tags": tags_response.tags,
-                "text_content": text_response.text_content if text_response.has_text else "",
+                "description": description_res.description,
+                "tags": tags_res.tags,
+                "text_content": text_res.text_content if text_res.has_text else "",
                 "is_processed": True
             }
 
         except Exception as e:
-            logger.error(f"Error processing image {image_path}: {str(e)}")
-            raise
+            # Тихая обработка ошибки: не прерывает работу всей программы
+            logger.warning(f"Skipping {image_path.name}: {str(e)}")
+            if self.temp_path.exists():
+                os.remove(self.temp_path)
+            return {
+                "description": "", "tags": [], "text_content": "",
+                "is_processed": False, "error": str(e)
+            }
 
     async def _get_description(self, image_path: str) -> ImageDescription:
-        """Get a structured description of the image."""
-        response = await self._query_ollama(
-            "Describe this image in one or two sentences.",
-            image_path,
-            ImageDescription.model_json_schema()
-        )
+        prompt = "Describe this image in one short sentence."
+        response = await self._query_ollama(prompt, image_path, ImageDescription.model_json_schema())
         return ImageDescription.model_validate_json(response)
 
     async def _get_tags(self, image_path: str) -> ImageTags:
-        """Get structured tags for the image."""
-        response = await self._query_ollama(
-            "List 5-10 relevant tags for this image. Include both objects, artistic style, type of image, color, etc.",
-            image_path,
-            ImageTags.model_json_schema()
-        )
+        # Ограничиваем количество, чтобы модель не зацикливалась
+        prompt = "List 5-10 unique one-word tags. No repetitions."
+        response = await self._query_ollama(prompt, image_path, ImageTags.model_json_schema())
         return ImageTags.model_validate_json(response)
 
     async def _get_text_content(self, image_path: str) -> ImageText:
-        """
-        Extract structured text content from the image.
-        Returns a model with has_text boolean flag and text_content string.
-        If has_text is False, text_content will be ignored.
-        """
-        response = await self._query_ollama(
-            "Identify if there is visible text in the image. Respond with JSON where 'has_text' is true only if there is actual text visible in the image, and 'text_content' contains the extracted text. If no text is visible, set 'has_text' to false and 'text_content' to empty string.",
-            image_path,
-            ImageText.model_json_schema()
-        )
-        result = ImageText.model_validate_json(response)
-        
-        # Ensure text_content is empty if has_text is False
-        if not result.has_text:
-            result.text_content = ""
-        
-        return result
+        prompt = "Identify if there is text. Respond in JSON."
+        response = await self._query_ollama(prompt, image_path, ImageText.model_json_schema())
+        return ImageText.model_validate_json(response)
 
     async def _query_ollama(self, prompt: str, image_path: str, format_schema: dict) -> str:
-        """Send a query to Ollama with an image and expect structured output."""
-        try:
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[{
-                    'role': 'user',
-                    'content': prompt,
-                    'images': [image_path],
-                    'options': {
-                        'num_gpu': 41
-                    }
-                }],
-                format=format_schema
-            )
-            return response['message']['content']
-        except Exception as e:
-            logger.error(f"Ollama query failed: {str(e)}")
-            raise
+        """Запрос к Ollama с 3 попытками в случае сбоя."""
+        max_retries = 3
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Запрос к ИИ (попытка {attempt + 1}/{max_retries})...")
+                
+                response = ollama.chat(
+                    model=self.model_name,
+                    messages=[
+                        {'role': 'system', 'content': 'Ты русский ассистент. Отвечай строго в формате JSON.'},
+                        {'role': 'user', 'content': prompt, 'images': [image_path]}
+                    ],
+                    options={
+                        'temperature': 0.1,    # Низкая температура для стабильности
+                        'num_predict': 512,
+                        'num_ctx': 4096,
+                        'num_gpu': -1,         # Используем всю мощь RTX 5060 Ti
+                        'repeat_penalty': 2.0  # Защита от повторов
+                    },
+                    format=format_schema
+                )
+                
+                # Если ответ получен, выходим из цикла и возвращаем результат
+                return response['message']['content']
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Попытка {attempt + 1} не удалась: {str(e)}")
+                # Можно добавить микро-паузу перед следующей попыткой
+                import asyncio
+                await asyncio.sleep(1)
+
+        # Если после 3 попыток ничего не вышло, выбрасываем ошибку
+        logger.error(f"Все {max_retries} попытки завершились ошибкой.")
+        raise last_error
 
 def update_image_metadata(folder_path: Path, image_path: str, metadata: Dict) -> None:
-    """Update the metadata file with new image processing results."""
+    """Запись результатов в JSON-файл."""
     metadata_file = folder_path / "image_metadata.json"
-    
     try:
         if metadata_file.exists():
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 all_metadata = json.load(f)
         else:
             all_metadata = {}
-
-        # Update the metadata for this image
+        
         all_metadata[image_path] = metadata
-
-        # Save the updated metadata
-        with open(metadata_file, 'w') as f:
-            json.dump(all_metadata, f, indent=4)
-
+        
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(all_metadata, f, indent=4, ensure_ascii=False)
     except Exception as e:
-        logger.error(f"Error updating metadata file: {str(e)}")
-        raise
+        logger.error(f"Error saving metadata: {str(e)}")
