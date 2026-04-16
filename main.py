@@ -149,12 +149,12 @@ async def process_image_endpoint(request: ProcessImageRequest):
         update_image_metadata(folder_path, request.image_path, result)
         
         # 4. ЗАПИСЬ В EXIF (В сам файл изображения)
-        write_metadata_to_file(
-            folder_path / request.image_path,
-            result["description"],
-            result["tags"],
-            result.get("tags_ru", [])
-        )
+        #write_metadata_to_file(
+        #    folder_path / request.image_path,
+        #    result["description"],
+        #    result["tags"],
+        #    result.get("tags_ru", [])
+        #)
 
     return result
 
