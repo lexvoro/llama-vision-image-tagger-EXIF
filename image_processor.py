@@ -77,7 +77,7 @@ class ImageProcessor:
 
             if self.temp_path.exists():
                 os.remove(self.temp_path)
-                
+
             import gc
             gc.collect()
 
@@ -153,7 +153,7 @@ class ImageProcessor:
         return ImageText.model_validate_json(response)
 
     async def _query_ollama(self, prompt: str, image_path: str, format_schema: dict) -> str:
-        max_retries = 10
+        max_retries = 2
         # Устанавливаем лимит ожидания в секундах
         TIMEOUT_SECONDS = 120 
 
@@ -170,8 +170,10 @@ class ImageProcessor:
                         options={
                             'temperature': 0.3,
                             'num_gpu': -1,
-                            'num_predict': 1024, # Ограничиваем длину ответа (меньше слов = быстрее)
+                            'num_predict': 4096, # Ограничиваем длину ответа (меньше слов = быстрее)
+                            'repeat_penalty': 1.2,
                         },
+                        keep_alive='10m',
                         format=format_schema
                     ),
                     timeout=TIMEOUT_SECONDS
