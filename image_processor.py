@@ -36,34 +36,42 @@ class ImageProcessor:
         return text.replace('\xad', '').strip()
 
     async def process_image(self, image_path: Path, tag_count: int = 10, languages: List[str] = ["en"]) -> Dict:
-        """Основной цикл обработки: Описание -> Теги EN -> Перевод на RU -> Текст."""
+        """Основной цикл обработки с ускоренным созданием превью."""
         try:
             if not image_path.exists():
                 return {"is_processed": False, "error": "File not found"}
 
-            # Оптимизация изображения для GPU (RTX 5060 Ti)
+            # --- УСКОРЕННЫЙ РЕСАЙЗ ---
             with Image.open(image_path) as img:
-                img.thumbnail((1024, 1024))
+                # 1. Draft позволяет декодировать JPEG сразу в нужном размере (в разы быстрее)
+                if image_path.suffix.lower() in ['.jpg', '.jpeg']:
+                    img.draft(None, (1024, 1024))
+                
+                # 2. Используем BILINEAR вместо LANCZOS — он быстрее, а нейронке качества хватит
+                img.thumbnail((1024, 1024), resample=Image.BILINEAR)
+                
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
-                img.save(self.temp_path, "JPEG", quality=85)
+                
+                # 3. Отключаем лишние оптимизации при сохранении временного файла
+                img.save(self.temp_path, "JPEG", quality=75, optimize=False)
+            # -------------------------
 
             image_path_str = str(self.temp_path.absolute())
 
-            # 1. Получаем описание (всегда на англ для точности)
+            # 1. Получаем описание
             description_res = await self._get_description(image_path_str)
             
-            # 2. Получаем английские теги (базовая логика)
+            # 2. Получаем английские теги
             tags_res = await self._get_tags(image_path_str, tag_count)
             en_tags = [self._clean_text(t).lower() for t in tags_res.tags]
 
-            # 3. Если выбран русский — переводим список тегов
+            # 3. Перевод на русский
             ru_tags = []
             if "ru" in languages and en_tags:
-                logger.info(f"Перевод тегов на русский для {image_path.name}...")
                 ru_tags = await self._translate_tags(en_tags)
 
-            # 4. Ищем текст на изображении
+            # 4. Ищем текст
             text_res = await self._get_text_content(image_path_str)
 
             if self.temp_path.exists():
@@ -85,6 +93,7 @@ class ImageProcessor:
                 "description": "", "tags": [], "tags_ru": [], "text_content": "",
                 "is_processed": False, "error": str(e)
             }
+
 
     async def _get_description(self, image_path: str) -> ImageDescription:
         prompt = "Describe this image in one short sentence in English."

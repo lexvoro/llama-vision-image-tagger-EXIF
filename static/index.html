@@ -151,7 +151,7 @@
                              'ring-2 ring-green-500': image.is_processed,
                              'ring-2 ring-orange-500': !image.is_processed
                          }">
-                        <img :src="image.url"
+                        <img :src="'/thumbnail/' + image.path"
                              :alt="image.description"
                              class="w-full h-full object-cover group-hover:opacity-75 transition-opacity">
                     </div>

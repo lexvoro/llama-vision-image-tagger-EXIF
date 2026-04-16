@@ -6,6 +6,8 @@ import os
 import json
 import logging
 import piexif
+import io
+from fastapi import Response
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from PIL import Image
@@ -231,6 +233,35 @@ async def save_all_metadata(request: Request):
     except Exception as e:
         logger.error(f"🔥 Critical Save Error: {str(e)}")
         return {"status": "error", "message": str(e)}
+
+@app.get("/thumbnail/{path:path}")
+async def get_thumbnail(path: str):
+    # Берем текущую папку из состояния приложения
+    if not hasattr(app, 'current_folder') or not app.current_folder:
+        raise HTTPException(status_code=400, detail="No folder selected")
+        
+    full_path = os.path.join(app.current_folder, path)
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404)
+        
+    try:
+        with Image.open(full_path) as img:
+            # Ускоряем чтение JPEG
+            if path.lower().endswith(('.jpg', '.jpeg')):
+                img.draft(None, (400, 400))
+            
+            # Делаем маленькое квадратное превью
+            img.thumbnail((400, 400), resample=Image.BILINEAR)
+            
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+                
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=60) # Качество 60 для веса в 5-10 Кб
+            return Response(content=buf.getvalue(), media_type="image/jpeg")
+    except Exception as e:
+        logger.error(f"Thumbnail error: {e}")
+        raise HTTPException(status_code=500)
 
 
 @app.get("/image/{path:path}")
