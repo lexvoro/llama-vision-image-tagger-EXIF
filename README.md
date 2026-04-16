@@ -1,3 +1,4 @@
+Тепеоь теги доббовляются прямо в методанные фотографий
 # Image Tagger
 
 This project is an image tagging and searching application that leverages the power of open-source local multimodal LLM like Llama 3.2 Vision and vector database like ChromaDB to provide a seamless image management experience.
