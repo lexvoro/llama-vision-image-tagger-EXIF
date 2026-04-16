@@ -136,16 +136,25 @@ async def get_images(request: FolderRequest):
 async def process_image_endpoint(request: ProcessImageRequest):
     folder_path = Path(app.current_folder)
 
-    metadata = load_simple_metadata(folder_path)
-    current_data = metadata.get(request.image_path, {})
+    # 1. Читаем данные ТОЛЬКО из JSON, не сканируя всю папку
+    metadata_file = folder_path / "image_metadata.json"
+    current_data = {}
     
-    # Сохраняем старые данные для объединения
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                all_meta = json.load(f)
+                # Берем данные конкретной картинки
+                current_data = all_meta.get(request.image_path, {})
+        except Exception as e:
+            logger.error(f"Error reading JSON in process: {e}")
+
+    # 2. Теперь переменная current_data существует, и ошибки не будет
     old_tags = current_data.get("tags", [])
     old_tags_ru = current_data.get("tags_ru", [])
     old_description = current_data.get("description", "").strip()
 
     img_processor = ImageProcessor()
-
     try:
         # Запускаем обработку (теперь с поддержкой перевода)
         result = await img_processor.process_image(
